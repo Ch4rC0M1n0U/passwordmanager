@@ -220,11 +220,11 @@ export default function Home() {
 
   return (
     <main className={styles.main}>
-      <h1>Gestionnaire local (import CSV)</h1>
+      <h1 className={styles.title}>Gestionnaire local (import CSV)</h1>
 
       <section>
-        <p>Importer un fichier CSV au format: profile,site,username,password,usage_count</p>
-        <input type="file" accept=".csv" onChange={handleFile} />
+        <p className={styles.desc}>Importer un fichier CSV au format: profile,site,username,password,usage_count</p>
+        <input className={styles.fileInput} type="file" accept=".csv" onChange={handleFile} />
       </section>
 
       <section style={{ marginTop: 20 }} className={styles.controls}>
@@ -236,8 +236,8 @@ export default function Home() {
   <section style={{ marginTop: 20 }} className={styles.controls}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
           <label>Filtrer par profil :</label>
-          <input value={profileFilter} onChange={(e)=>setProfileFilter(e.target.value)} placeholder="Ex: Personal" />
-          <select value={profileFilter} onChange={(e)=>setProfileFilter(e.target.value)}>
+          <input className={styles.textInput} value={profileFilter} onChange={(e)=>setProfileFilter(e.target.value)} placeholder="Ex: Personal" />
+          <select className={styles.textInput} value={profileFilter} onChange={(e)=>setProfileFilter(e.target.value)}>
             <option value="">(Tous)</option>
             {uniqueProfiles.map(p => <option key={p} value={p}>{p}</option>)}
           </select>
@@ -255,7 +255,7 @@ export default function Home() {
           }}>Désélectionner visibles</button>
         </div>
 
-        <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+  <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <input type="checkbox" onChange={(e) => {
             const filteredIds = filteredItems.map(i=>i.id)
             if (e.target.checked) {
@@ -294,7 +294,7 @@ export default function Home() {
           </thead>
           <tbody>
             {filteredItems.map(it => (
-              <tr key={it.id} className={`tableRow ${ (it.pwnedCount||0)>0 ? 'rowBad':'' }`}>
+              <tr key={it.id} className={`${styles.tableRow} ${(it.pwnedCount||0)>0 ? styles.rowBad:''}`}>
                 <td>
                   <input type="checkbox" checked={selectedIds.has(it.id)} onChange={() => toggleSelect(it.id)} />
                 </td>
@@ -303,7 +303,7 @@ export default function Home() {
                 <td>{it.username}</td>
                 <td>{it.usage}</td>
                 <td>
-                  {it.pwnedCount == null ? <span className="muted">—</span> : it.pwnedCount > 0 ? <span className={`badge badge_bad`}>{it.pwnedCount} fois</span> : <span className={`badge badge_safe`}>Non</span>}
+                  {it.pwnedCount == null ? <span className={styles.muted}>—</span> : it.pwnedCount > 0 ? <span className={`${styles.badge} ${styles.badge_bad}`}>{it.pwnedCount} fois</span> : <span className={`${styles.badge} ${styles.badge_safe}`}>Non</span>}
                 </td>
               </tr>
             ))}
