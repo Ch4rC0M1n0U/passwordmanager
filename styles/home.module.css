@@ -1,6 +1,6 @@
 .main {
-  padding: 20px 20px 60px;
-  max-width: 680px;
+  padding: 20px 24px 60px;
+  max-width: 1200px;
   margin: 0 auto;
 }
 
@@ -9,3 +9,35 @@
   border-bottom: 1px solid #efefef;
   margin: 3em auto;
 }
+
+.tableWrapper {
+  width: 100%;
+  overflow-x: auto;
+  border: 1px solid #e6e6e6;
+  border-radius: 6px;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.table th, .table td {
+  padding: 10px 12px;
+  text-align: left;
+  border-bottom: 1px solid #f4f4f4;
+}
+
+.badge {
+  display: inline-block;
+  padding: 4px 8px;
+  border-radius: 12px;
+  font-size: 12px;
+}
+
+.badge.safe { background: #e6f4ea; color: #1b7a3a; }
+.badge.warn { background: #fff4e6; color: #a65a00; }
+.badge.bad { background: #ffe6e6; color: #a60000; }
+
+.controls { display:flex; gap:8px; align-items:center; flex-wrap:wrap }
+
