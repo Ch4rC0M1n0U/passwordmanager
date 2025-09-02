@@ -1,3 +1,24 @@
+# Project
+
+Ce dépôt contient une démo Next.js pour l'import local d'un CSV de mots de passe et leur tri/gestion.
+
+Fonctionnalités:
+
+- Importer un CSV au format: profile,site,username,password,usage_count
+- Trier par vulnérabilité (via HaveIBeenPwned), par fréquence d'utilisation ou par nom de profil
+- Sélection multiple et suppression
+- Vérification des mots de passe via l'API publique HaveIBeenPwned en mode k-anonymity (proxy côté serveur sans stockage)
+
+Tester localement:
+
+1. Lancez l'application: `npm run dev`
+2. Ouvrez `http://localhost:3000`
+3. Importez un CSV et utilisez les boutons de tri / vérification.
+
+Sécurité et confidentialité:
+
+- L'API `/api/check-pwned` calcule le hash SHA-1 côté serveur et interroge l'endpoint `https://api.pwnedpasswords.com/range/<prefix>`; les mots de passe ne sont pas stockés et ne sont conservés que le temps de la requête.
+
 # GitHub Codespaces ♥️ Next.js
 
 Welcome to your shiny new Codespace running Next.js! We've got everything fired up and running for you to explore Next.js.
