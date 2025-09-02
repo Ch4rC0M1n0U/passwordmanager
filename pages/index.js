@@ -14,6 +14,7 @@ export default function Home() {
   const [originalColCount, setOriginalColCount] = useState(0)
   const [originalRows, setOriginalRows] = useState([])
   const [originalRawText, setOriginalRawText] = useState(null)
+  const [originalUsedQuotes, setOriginalUsedQuotes] = useState(null)
   const [selectedIds, setSelectedIds] = useState(new Set())
   const [checking, setChecking] = useState(false)
   const [filterField, setFilterField] = useState('profile')
@@ -86,7 +87,7 @@ export default function Home() {
 
     const allLines = parseCSVText(text).filter(r => r.some(c => (c||'').trim() !== ''))
 
-    // detect header row if first line contains known column names
+  // detect header row if first line contains known column names
     const maybeHeader = allLines.length > 0 ? allLines[0].map(c => (c||'').toString().toLowerCase().trim()) : []
     const headerKeywords = ['profile','site','username','user','login','password','pass','usage','count']
     const hasHeader = maybeHeader.some(h => headerKeywords.includes(h))
@@ -98,6 +99,14 @@ export default function Home() {
     setOriginalHeaders(hasHeader ? allLines[0] : null)
     setOriginalColCount(dataLines.length > 0 ? Math.max(...dataLines.map(r => r.length)) : (hasHeader ? allLines[0].length : 0))
     setOriginalRows(dataLines.map(r => r.slice()))
+    // detect whether original file used quoted fields by inspecting first non-empty raw line
+    try {
+      const firstRawLine = text.split(/\r?\n/).find(l => (l||'').trim() !== '') || ''
+      const quotedFieldPattern = /(^|,)\s*"(?:[^"]|"")*"\s*(?=,|$)/
+      setOriginalUsedQuotes(quotedFieldPattern.test(firstRawLine))
+    } catch (e) {
+      setOriginalUsedQuotes(true)
+    }
 
     const parsed = dataLines.map((parts, idx) => ({
       id: `${now}_${idx}`,
@@ -109,7 +118,7 @@ export default function Home() {
       pwnedCount: null,
       originalRowIndex: idx
     }))
-    setItems(prev => [...prev, ...parsed])
+  setItems(prev => [...prev, ...parsed])
   }
 
   function handleFile(e) {
@@ -302,7 +311,7 @@ export default function Home() {
 
         <button className="btn btnDanger ml8" onClick={deleteSelected} disabled={selectedIds.size===0}>Supprimer la sélection</button>
 
-  <button className="btn ml8" onClick={() => exportCSV(filteredItems.length ? filteredItems : items, originalHeaders, originalColCount, originalRows)} disabled={items.length===0}>Exporter CSV</button>
+  <button className="btn ml8" onClick={() => exportCSV(filteredItems.length ? filteredItems : items, originalHeaders, originalColCount, originalRows, originalRawText, originalUsedQuotes)} disabled={items.length===0}>Exporter CSV</button>
       </section>
 
       <section style={{ marginTop: 20 }} className={styles.tableWrapper}>
@@ -351,13 +360,10 @@ export default function Home() {
   )
 }
 
-function exportCSV(items, originalHeaders, originalColCount, originalRows) {
+function exportCSV(items, originalHeaders, originalColCount, originalRows, originalRawText, originalUsedQuotes) {
   // Rebuild using original headers/column count if available to keep identity
   const colCount = originalColCount || 5
   const headerRow = originalHeaders ? originalHeaders.map(h => String(h)) : ['profile','site','username','password','usage']
-
-  // detect if original used quoted fields (simple heuristic)
-  const originalUsedQuotes = originalRawText ? (originalRawText.indexOf('"') !== -1 && originalRawText.indexOf(',"') !== -1) : true
 
   const rows = items.map(i => {
     // attempt to preserve original row by index if available
