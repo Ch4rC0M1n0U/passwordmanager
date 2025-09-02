@@ -79,6 +79,20 @@
 .badge_warn { background:#fffbeb; color:#92400e }
 .badge_bad { background:#fff1f2; color:#7f1d1d }
 
+.spinner {
+  display:inline-block;
+  width:12px;
+  height:12px;
+  border-radius:50%;
+  border:2px solid rgba(0,0,0,0.08);
+  border-top-color: rgba(0,0,0,0.5);
+  margin-right:6px;
+  vertical-align:middle;
+  animation: spin 800ms linear infinite;
+}
+
+@keyframes spin { to { transform: rotate(360deg) } }
+
 /* Modal */
 .modalOverlay { position:fixed; inset:0; display:flex; align-items:center; justify-content:center; background:rgba(2,6,23,0.5); }
 .modalDialog { background:#fff; padding:20px; border-radius:10px; width:420px; box-shadow:0 10px 30px rgba(2,6,23,0.2) }

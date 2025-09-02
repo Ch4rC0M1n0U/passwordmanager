@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useRef } from 'react'
 import styles from '../styles/home.module.css'
 
 // Application centrée sur l'import CSV des éléments de gestion de mots de passe
@@ -19,11 +19,18 @@ export default function Home() {
   const [checking, setChecking] = useState(false)
   const [filterField, setFilterField] = useState('profile')
   const [filterValue, setFilterValue] = useState('')
-  const filteredItems = items.filter(i => {
+  const [siteFilter, setSiteFilter] = useState('all')
+  const [checkingSites, setCheckingSites] = useState(false)
+  const siteControllersRef = useRef(new Map())
+  const [siteCheckProgress, setSiteCheckProgress] = useState({ checked: 0, total: 0 })
+  let filteredItems = items.filter(i => {
     if (!filterValue) return true
     const v = (i[filterField] || '').toString().toLowerCase()
     return v.includes(filterValue.toLowerCase())
   })
+  if (siteFilter && siteFilter !== 'all') {
+    filteredItems = filteredItems.filter(i => i.siteStatus === siteFilter)
+  }
   const uniqueValues = Array.from(new Set(items.map(i => (i[filterField]||'').toString().trim()).filter(Boolean))).sort()
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
   const [pendingDeleteIds, setPendingDeleteIds] = useState(new Set())
@@ -115,7 +122,8 @@ export default function Home() {
       username: parts[2] ? parts[2].trim() : '',
       password: parts[3] ? parts[3] : '',
       usage: parts[4] ? parseInt(parts[4].trim(), 10) || 0 : 0,
-      pwnedCount: null,
+  pwnedCount: null,
+  siteStatus: 'unknown',
       originalRowIndex: idx
     }))
   setItems(prev => [...prev, ...parsed])
@@ -234,6 +242,90 @@ export default function Home() {
     }
   }
 
+  // vérifie si une URL répond (HEAD then GET fallback). Retourne 'alive'|'dead'|'unknown'
+  async function checkUrlAlive(url) {
+    if (!url) return 'unknown'
+    try {
+  // ensure url has protocol
+  let u = url.trim()
+  if (!/^https?:\/\//i.test(u)) u = 'https://' + u
+  // do a HEAD with timeout/abort support (caller should provide AbortController)
+  const res = await fetch(u, { method: 'HEAD' })
+  if (res && res.ok) return 'alive'
+  // if HEAD returns non-ok status, consider dead
+  return (res && !res.ok) ? 'dead' : 'unknown'
+    } catch (e) {
+  // network or CORS issue -> unknown
+  return 'unknown'
+    }
+  }
+
+  // Vérifie les sites pour les éléments sélectionnés via /api/probe
+  async function checkSitesForSelected() {
+    const toCheck = items.filter(i => selectedIds.has(i.id))
+    if (toCheck.length === 0) return
+    siteControllersRef.current = new Map()
+    setSiteCheckProgress({ checked: 0, total: toCheck.length })
+    setCheckingSites(true)
+    try {
+      const CONC = 6
+      let idx = 0
+      async function worker() {
+        while (idx < toCheck.length) {
+          const current = idx++
+          const item = toCheck[current]
+          if (siteControllersRef.current.stopped) break
+          // create a local AbortController for fetch to /api/probe
+          const controller = new AbortController()
+          siteControllersRef.current.set(item.id, controller)
+          // mark as checking so the UI shows a per-row indicator
+          setItems(prev => prev.map(it => it.id === item.id ? { ...it, siteStatus: 'checking', httpStatus: null, timeMs: null } : it))
+          const timeoutId = setTimeout(() => controller.abort(), 10000)
+          try {
+            const res = await fetch('/api/probe', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url: item.site }), signal: controller.signal })
+            if (!res.ok) throw new Error('probe failed')
+            const body = await res.json()
+            // body: { status, httpStatus, timeMs }
+            setItems(prev => prev.map(it => it.id === item.id ? { ...it, siteStatus: body.status, httpStatus: body.httpStatus, timeMs: body.timeMs } : it))
+          } catch (err) {
+            // mark as unknown
+            setItems(prev => prev.map(it => it.id === item.id ? { ...it, siteStatus: 'unknown', httpStatus: null, timeMs: null } : it))
+          } finally {
+            clearTimeout(timeoutId)
+            siteControllersRef.current.delete(item.id)
+            setSiteCheckProgress(p => ({ checked: p.checked + 1, total: p.total }))
+          }
+        }
+      }
+      await Promise.all(Array.from({ length: Math.min(CONC, toCheck.length) }).map(() => worker()))
+    } catch (e) {
+      console.error('Site check error', e)
+    } finally {
+      setCheckingSites(false)
+    }
+  }
+
+  function stopSiteChecks() {
+    // mark stopped and abort all controllers
+    siteControllersRef.current.stopped = true
+    for (const [, ctrl] of siteControllersRef.current) {
+      try { ctrl.abort() } catch (e) {}
+    }
+    siteControllersRef.current = new Map()
+    setCheckingSites(false)
+  }
+
+  function deleteDeadSites() {
+    // supprimer les éléments visibles ou sélectionnés avec siteStatus === 'dead'
+    const toRemove = items.filter(i => selectedIds.has(i.id) && i.siteStatus === 'dead').map(i => i.id)
+    if (toRemove.length === 0) {
+      alert('Aucun site marqué comme HS dans la sélection.')
+      return
+    }
+    setPendingDeleteIds(new Set(toRemove))
+    setShowDeleteConfirm(true)
+  }
+
   // tri simple
   function sortByUsage() {
     setItems(prev => [...prev].sort((a,b) => b.usage - a.usage))
@@ -309,9 +401,25 @@ export default function Home() {
           {checking ? 'Vérification...' : `Vérifier ${selectedIds.size} sélection(s)`}
         </button>
 
+        <button className="btn ml8" onClick={checkSitesForSelected} disabled={checking || selectedIds.size===0}>Vérifier sites</button>
+
+  <select className={styles.textInput} value={siteFilter} onChange={(e)=>setSiteFilter(e.target.value)}>
+          <option value="all">Tous sites</option>
+          <option value="alive">En ligne</option>
+          <option value="dead">HS (dead)</option>
+          <option value="unknown">Inconnu</option>
+        </select>
+
+  <button className="btn ml8" onClick={stopSiteChecks} disabled={!checkingSites}>Stop vérif.</button>
+
+  <span style={{marginLeft:8}}>{checkingSites ? `Progress: ${siteCheckProgress.checked}/${siteCheckProgress.total}` : ''}</span>
+
+  <button className="btn btnDanger ml8" onClick={deleteDeadSites} disabled={selectedIds.size===0}>Supprimer sites HS (sélection)</button>
+
         <button className="btn btnDanger ml8" onClick={deleteSelected} disabled={selectedIds.size===0}>Supprimer la sélection</button>
 
   <button className="btn ml8" onClick={() => exportCSV(filteredItems.length ? filteredItems : items, originalHeaders, originalColCount, originalRows, originalRawText, originalUsedQuotes)} disabled={items.length===0}>Exporter CSV</button>
+  <button className="btn ml8" onClick={() => exportProbeResults(filteredItems.length ? filteredItems : items)} disabled={items.length===0}>Exporter résultats probes</button>
       </section>
 
       <section style={{ marginTop: 20 }} className={styles.tableWrapper}>
@@ -321,23 +429,33 @@ export default function Home() {
               <th></th>
               <th>Profil</th>
               <th>Site</th>
+              <th>État du site</th>
               <th>Username</th>
               <th>Usage</th>
+              <th>Détails</th>
               <th>Vulnérabilité (pwned)</th>
             </tr>
           </thead>
           <tbody>
             {filteredItems.map(it => (
-              <tr key={it.id} className={`${styles.tableRow} ${(it.pwnedCount||0)>0 ? styles.rowBad:''}`}>
+              <tr key={it.id} className={styles.tableRow + ' ' + ((it.pwnedCount||0)>0 ? styles.rowBad : '')}>
                 <td>
                   <input type="checkbox" checked={selectedIds.has(it.id)} onChange={() => toggleSelect(it.id)} />
                 </td>
                 <td>{it.profile}</td>
                 <td>{it.site}</td>
+                <td>
+                  {it.siteStatus === 'checking' ? (
+                    <span><span className={styles.spinner}></span><span className={styles.muted}>Vérif...</span></span>
+                  ) : it.siteStatus === 'alive' ? <span className={styles.badge + ' ' + styles.badge_safe}>En ligne</span> : it.siteStatus === 'dead' ? <span className={styles.badge + ' ' + styles.badge_bad}>HS</span> : <span className={styles.muted}>—</span>}
+                </td>
                 <td>{it.username}</td>
                 <td>{it.usage}</td>
                 <td>
-                  {it.pwnedCount == null ? <span className={styles.muted}>—</span> : it.pwnedCount > 0 ? <span className={`${styles.badge} ${styles.badge_bad}`}>{it.pwnedCount} fois</span> : <span className={`${styles.badge} ${styles.badge_safe}`}>Non</span>}
+                  {it.httpStatus ? <span className={styles.muted}>{it.httpStatus} {it.timeMs ? `(${it.timeMs}ms)` : ''}</span> : <span className={styles.muted}>—</span>}
+                </td>
+                <td>
+                  {it.pwnedCount == null ? <span className={styles.muted}>—</span> : it.pwnedCount > 0 ? <span className={styles.badge + ' ' + styles.badge_bad}>{it.pwnedCount} fois</span> : <span className={styles.badge + ' ' + styles.badge_safe}>Non</span>}
                 </td>
               </tr>
             ))}
@@ -470,4 +588,33 @@ function exportCSV(items, originalHeaders, originalColCount, originalRows, origi
     URL.revokeObjectURL(url)
     partIdx++
   }
+}
+
+function exportProbeResults(items) {
+  if (!items || items.length === 0) {
+    alert('Aucun item à exporter')
+    return
+  }
+  const header = ['profile','site','username','password','usage','siteStatus','httpStatus','timeMs']
+  const lines = [header.join(',')]
+  for (const it of items) {
+    const cells = [it.profile, it.site, it.username, it.password, it.usage || '', it.siteStatus || '', it.httpStatus || '', it.timeMs || '']
+    const escaped = cells.map(c => {
+      if (c === null || c === undefined) return ''
+      const s = String(c)
+      if (s.includes(',') || s.includes('"') || s.includes('\n')) return '"' + s.replace(/"/g,'""') + '"'
+      return s
+    })
+    lines.push(escaped.join(','))
+  }
+  const csv = lines.join('\n')
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = 'probe_results.csv'
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  URL.revokeObjectURL(url)
 }
