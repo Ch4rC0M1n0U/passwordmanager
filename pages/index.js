@@ -10,14 +10,20 @@ import styles from '../styles/home.module.css'
 
 export default function Home() {
   const [items, setItems] = useState([])
+  const [originalHeaders, setOriginalHeaders] = useState(null)
+  const [originalColCount, setOriginalColCount] = useState(0)
+  const [originalRows, setOriginalRows] = useState([])
+  const [originalRawText, setOriginalRawText] = useState(null)
   const [selectedIds, setSelectedIds] = useState(new Set())
   const [checking, setChecking] = useState(false)
-  const [profileFilter, setProfileFilter] = useState('')
+  const [filterField, setFilterField] = useState('profile')
+  const [filterValue, setFilterValue] = useState('')
   const filteredItems = items.filter(i => {
-    if (!profileFilter) return true
-    return (i.profile||'').toLowerCase().includes(profileFilter.toLowerCase())
+    if (!filterValue) return true
+    const v = (i[filterField] || '').toString().toLowerCase()
+    return v.includes(filterValue.toLowerCase())
   })
-  const uniqueProfiles = Array.from(new Set(items.map(i => (i.profile||'').trim()).filter(Boolean))).sort()
+  const uniqueValues = Array.from(new Set(items.map(i => (i[filterField]||'').toString().trim()).filter(Boolean))).sort()
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
   const [pendingDeleteIds, setPendingDeleteIds] = useState(new Set())
 
@@ -78,16 +84,30 @@ export default function Home() {
       return rows
     }
 
-    const lines = parseCSVText(text).filter(r => r.some(c => (c||'').trim() !== ''))
+    const allLines = parseCSVText(text).filter(r => r.some(c => (c||'').trim() !== ''))
+
+    // detect header row if first line contains known column names
+    const maybeHeader = allLines.length > 0 ? allLines[0].map(c => (c||'').toString().toLowerCase().trim()) : []
+    const headerKeywords = ['profile','site','username','user','login','password','pass','usage','count']
+    const hasHeader = maybeHeader.some(h => headerKeywords.includes(h))
+
+    const dataLines = hasHeader ? allLines.slice(1) : allLines
     const now = Date.now()
-    const parsed = lines.map((parts, idx) => ({
+
+    // store original header and column count
+    setOriginalHeaders(hasHeader ? allLines[0] : null)
+    setOriginalColCount(dataLines.length > 0 ? Math.max(...dataLines.map(r => r.length)) : (hasHeader ? allLines[0].length : 0))
+    setOriginalRows(dataLines.map(r => r.slice()))
+
+    const parsed = dataLines.map((parts, idx) => ({
       id: `${now}_${idx}`,
       profile: parts[0] ? parts[0].trim() : '',
       site: parts[1] ? parts[1].trim() : '',
       username: parts[2] ? parts[2].trim() : '',
       password: parts[3] ? parts[3] : '',
       usage: parts[4] ? parseInt(parts[4].trim(), 10) || 0 : 0,
-      pwnedCount: null
+      pwnedCount: null,
+      originalRowIndex: idx
     }))
     setItems(prev => [...prev, ...parsed])
   }
@@ -96,7 +116,7 @@ export default function Home() {
     const f = e.target.files && e.target.files[0]
     if (!f) return
     const reader = new FileReader()
-    reader.onload = () => parseCSV(reader.result)
+  reader.onload = () => { setOriginalRawText(reader.result); parseCSV(reader.result) }
     reader.readAsText(f)
   }
 
@@ -235,11 +255,16 @@ export default function Home() {
 
   <section style={{ marginTop: 20 }} className={styles.controls}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          <label>Filtrer par profil :</label>
-          <input className={styles.textInput} value={profileFilter} onChange={(e)=>setProfileFilter(e.target.value)} placeholder="Ex: Personal" />
-          <select className={styles.textInput} value={profileFilter} onChange={(e)=>setProfileFilter(e.target.value)}>
+          <label>Filtrer par :</label>
+          <select className={styles.textInput} value={filterField} onChange={(e)=>{ setFilterField(e.target.value); setFilterValue('') }}>
+            <option value="profile">Profil</option>
+            <option value="username">Username</option>
+            <option value="site">Site</option>
+          </select>
+          <input className={styles.textInput} value={filterValue} onChange={(e)=>setFilterValue(e.target.value)} placeholder="Ex: Personal" />
+          <select className={styles.textInput} value={filterValue} onChange={(e)=>setFilterValue(e.target.value)}>
             <option value="">(Tous)</option>
-            {uniqueProfiles.map(p => <option key={p} value={p}>{p}</option>)}
+            {uniqueValues.map(p => <option key={p} value={p}>{p}</option>)}
           </select>
           <button className="btn" onClick={()=>{
             const ids = filteredItems.map(i=>i.id)
@@ -277,7 +302,7 @@ export default function Home() {
 
         <button className="btn btnDanger ml8" onClick={deleteSelected} disabled={selectedIds.size===0}>Supprimer la sélection</button>
 
-        <button className="btn ml8" onClick={() => exportCSV(filteredItems.length ? filteredItems : items)} disabled={items.length===0}>Exporter CSV</button>
+  <button className="btn ml8" onClick={() => exportCSV(filteredItems.length ? filteredItems : items, originalHeaders, originalColCount, originalRows)} disabled={items.length===0}>Exporter CSV</button>
       </section>
 
       <section style={{ marginTop: 20 }} className={styles.tableWrapper}>
@@ -326,17 +351,117 @@ export default function Home() {
   )
 }
 
-function exportCSV(items) {
-  const header = ['profile','site','username','password','usage']
-  const rows = items.map(i => [i.profile,i.site,i.username,i.password,i.usage].map(v=>`"${String(v).replace(/"/g,'""')}"`).join(','))
-  const csv = [header.join(','), ...rows].join('\n')
-  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = 'export.csv'
-  document.body.appendChild(a)
-  a.click()
-  a.remove()
-  URL.revokeObjectURL(url)
+function exportCSV(items, originalHeaders, originalColCount, originalRows) {
+  // Rebuild using original headers/column count if available to keep identity
+  const colCount = originalColCount || 5
+  const headerRow = originalHeaders ? originalHeaders.map(h => String(h)) : ['profile','site','username','password','usage']
+
+  // detect if original used quoted fields (simple heuristic)
+  const originalUsedQuotes = originalRawText ? (originalRawText.indexOf('"') !== -1 && originalRawText.indexOf(',"') !== -1) : true
+
+  const rows = items.map(i => {
+    // attempt to preserve original row by index if available
+    const original = (originalRows && originalRows[i.originalRowIndex]) || []
+    const out = []
+    for (let c = 0; c < colCount; c++) {
+      // map standard columns to indices 0..4, else preserve original cell if present
+      let v = ''
+      if (c === 0) v = i.profile
+      else if (c === 1) v = i.site
+      else if (c === 2) v = i.username
+      else if (c === 3) v = i.password
+      else if (c === 4) v = i.usage
+      // if original had extra columns, prefer original content for those indices
+      if ((original[c] || '').toString().trim() !== '') {
+        // if original contained a value and we don't have a mapped value, use original
+        if (v === '' || (c >= 5)) v = original[c]
+      }
+  if (originalUsedQuotes) out.push(`"${String(v === null || v === undefined ? '' : v).replace(/"/g,'""')}"`)
+  else out.push(String(v === null || v === undefined ? '' : v))
+    }
+    return out.join(',')
+  })
+
+  const csv = (headerRow ? [headerRow.map(h=>`"${String(h).replace(/"/g,'""')}"`).join(',')] : []).concat(rows).join('\n')
+
+  // Compare generated rows to originalRows to check identity
+  let identical = false
+  try {
+    if (originalRows && originalRows.length > 0) {
+      // normalize both sides
+      const normOrig = originalRows.map(r => r.map(c => (c||'').toString().trim()).join(','))
+      const genRows = items.map(i => {
+        const original = (originalRows && originalRows[i.originalRowIndex]) || []
+        const cells = []
+        for (let c=0;c<colCount;c++) {
+          let v = c===0?i.profile: c===1?i.site: c===2?i.username: c===3?i.password: c===4?i.usage: ''
+          if ((original[c]||'').toString().trim() !== '') {
+            if (v === '' || (c>=5)) v = original[c]
+          }
+          cells.push((v||'').toString().trim())
+        }
+        return cells.join(',')
+      })
+      // compare lengths and each normalized row
+      if (genRows.length === normOrig.length) {
+        identical = genRows.every((r, idx) => r === normOrig[idx])
+      }
+    }
+  } catch (e) {
+    console.error('Compare error', e)
+  }
+
+  if (identical) {
+    // inform user that exported file is identical to source
+    alert('L\'export semble identique au fichier source (colonnes et valeurs). Le téléchargement va démarrer.')
+  } else {
+    // warn user that export differs in structure or values
+    const diffMsg = originalRows ? 'Le fichier export diffère de la source (colonnes/valeurs). Le téléchargement va démarrer.' : 'Aucune information d\'origine disponible ; export standard.'
+    alert(diffMsg)
+  }
+  const MAX_BYTES = 150 * 1024 // 150 KB
+  const encoder = new TextEncoder()
+  const bytes = encoder.encode(csv)
+  if (bytes.length <= MAX_BYTES) {
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = 'export.csv'
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    URL.revokeObjectURL(url)
+    return
+  }
+
+  // split into multiple files, each with headerRow if available
+  const lines = csv.split('\n')
+  const headerLine = headerRow ? headerRow.map(h=> originalUsedQuotes ? `"${String(h).replace(/"/g,'""')}"` : String(h)).join(',') : null
+  // start from index 0 if no header in originalRows, otherwise lines already include header at 0
+  let startIndex = headerLine ? 1 : 0
+  let partIdx = 1
+  while (startIndex < lines.length) {
+    let partLines = headerLine ? [headerLine] : []
+    let size = encoder.encode(partLines.join('\n') + '\n').length
+    while (startIndex < lines.length) {
+      const nextLine = lines[startIndex]
+      const nextSize = encoder.encode('\n' + nextLine).length
+      if (size + nextSize > MAX_BYTES && partLines.length > (headerLine ? 1 : 0)) break
+      partLines.push(nextLine)
+      size += nextSize
+      startIndex++
+    }
+    const partCsv = partLines.join('\n')
+    const blob = new Blob([partCsv], { type: 'text/csv;charset=utf-8;' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `export_part_${partIdx}.csv`
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    URL.revokeObjectURL(url)
+    partIdx++
+  }
 }
