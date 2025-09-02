@@ -12,21 +12,83 @@ export default function Home() {
   const [items, setItems] = useState([])
   const [selectedIds, setSelectedIds] = useState(new Set())
   const [checking, setChecking] = useState(false)
+  const [profileFilter, setProfileFilter] = useState('')
+  const filteredItems = items.filter(i => {
+    if (!profileFilter) return true
+    return (i.profile||'').toLowerCase().includes(profileFilter.toLowerCase())
+  })
+  const uniqueProfiles = Array.from(new Set(items.map(i => (i.profile||'').trim()).filter(Boolean))).sort()
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
+  const [pendingDeleteIds, setPendingDeleteIds] = useState(new Set())
 
   function parseCSV(text) {
-    const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean)
-    const parsed = lines.map((line, idx) => {
-      const parts = line.split(',')
-      return {
-        id: `${Date.now()}_${idx}`,
-        profile: parts[0] || '',
-        site: parts[1] || '',
-        username: parts[2] || '',
-        password: parts[3] || '',
-        usage: parseInt(parts[4], 10) || 0,
-        pwnedCount: null
+    // Parser CSV robuste (gère champs entre guillemets et virgules échappées)
+    function parseCSVText(txt) {
+      const rows = []
+      let i = 0
+      let cur = ''
+      let row = []
+      let inQuotes = false
+      while (i < txt.length) {
+        const ch = txt[i]
+        if (inQuotes) {
+          if (ch === '"') {
+            if (i + 1 < txt.length && txt[i + 1] === '"') { // double quote => escape
+              cur += '"'
+              i += 2
+              continue
+            }
+            inQuotes = false
+            i++
+            continue
+          }
+          cur += ch
+          i++
+          continue
+        }
+        if (ch === '"') {
+          inQuotes = true
+          i++
+          continue
+        }
+        if (ch === ',') {
+          row.push(cur)
+          cur = ''
+          i++
+          continue
+        }
+        if (ch === '\n' || (ch === '\r' && txt[i+1] === '\n')) {
+          // handle CRLF
+          if (ch === '\r' && txt[i+1] === '\n') i++
+          row.push(cur)
+          rows.push(row)
+          row = []
+          cur = ''
+          i++
+          continue
+        }
+        cur += ch
+        i++
       }
-    })
+      // last field
+      if (cur !== '' || row.length > 0) {
+        row.push(cur)
+        rows.push(row)
+      }
+      return rows
+    }
+
+    const lines = parseCSVText(text).filter(r => r.some(c => (c||'').trim() !== ''))
+    const now = Date.now()
+    const parsed = lines.map((parts, idx) => ({
+      id: `${now}_${idx}`,
+      profile: parts[0] ? parts[0].trim() : '',
+      site: parts[1] ? parts[1].trim() : '',
+      username: parts[2] ? parts[2].trim() : '',
+      password: parts[3] ? parts[3] : '',
+      usage: parts[4] ? parseInt(parts[4].trim(), 10) || 0 : 0,
+      pwnedCount: null
+    }))
     setItems(prev => [...prev, ...parsed])
   }
 
@@ -48,8 +110,26 @@ export default function Home() {
   }
 
   function deleteSelected() {
-    setItems(prev => prev.filter(i => !selectedIds.has(i.id)))
-    setSelectedIds(new Set())
+    // ouvrir la modal de confirmation; stocker les ids à supprimer
+    if (selectedIds.size === 0) return
+    setPendingDeleteIds(new Set(selectedIds))
+    setShowDeleteConfirm(true)
+  }
+
+  function performDeleteConfirmed() {
+    setItems(prev => prev.filter(i => !pendingDeleteIds.has(i.id)))
+    setSelectedIds(prev => {
+      const copy = new Set(prev)
+      for (const id of pendingDeleteIds) copy.delete(id)
+      return copy
+    })
+    setPendingDeleteIds(new Set())
+    setShowDeleteConfirm(false)
+  }
+
+  function cancelDelete() {
+    setPendingDeleteIds(new Set())
+    setShowDeleteConfirm(false)
   }
 
   async function checkPwnedForSelected() {
@@ -110,33 +190,7 @@ export default function Home() {
 
       await Promise.all(Array.from({length: Math.min(CONC, prefixes.length)}).map(()=>worker()))
 
-      // if all results are null (possible CORS), fallback to server API
-      const needFallback = toCheck.some(t => resultsMap.get(t.id) === null)
-      if (needFallback) {
-        try {
-          const passwords = toCheck.map(i=>i.password)
-          const resp = await fetch('/api/check-pwned', {
-            method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ passwords })
-          })
-          const j = await resp.json()
-          if (Array.isArray(j.counts)) {
-            // apply server results
-            const updated = items.map(it => {
-              if (!selectedIds.has(it.id)) return it
-              const idx = toCheck.findIndex(x=>x.id===it.id)
-              const c = j.counts[idx]
-              return { ...it, pwnedCount: c }
-            })
-            setItems(updated)
-            setChecking(false)
-            return
-          }
-        } catch (err) {
-          console.error('Fallback server failed', err)
-        }
-      }
-
-      // apply direct HIBP results
+  // apply direct HIBP results; note: we DO NOT send les mots de passe au serveur
       const updated = items.map(it => {
         if (!selectedIds.has(it.id)) return it
         const c = resultsMap.get(it.id)
@@ -173,28 +227,57 @@ export default function Home() {
         <input type="file" accept=".csv" onChange={handleFile} />
       </section>
 
-      <section style={{ marginTop: 20 }}>
-        <button onClick={sortByPwned}>Trier par vulnérabilité (pwned)</button>
-        <button onClick={sortByUsage} style={{ marginLeft: 8 }}>Trier par utilisation</button>
-        <button onClick={sortByProfile} style={{ marginLeft: 8 }}>Trier par profil</button>
+      <section style={{ marginTop: 20 }} className={styles.controls}>
+        <button className="btn btnOutline" onClick={sortByPwned}>Trier par vulnérabilité</button>
+        <button className="btn ml8" onClick={sortByUsage}>Trier par utilisation</button>
+        <button className="btn ml8" onClick={sortByProfile}>Trier par profil</button>
       </section>
 
-      <section style={{ marginTop: 20 }} className={styles.controls}>
+  <section style={{ marginTop: 20 }} className={styles.controls}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <label>Filtrer par profil :</label>
+          <input value={profileFilter} onChange={(e)=>setProfileFilter(e.target.value)} placeholder="Ex: Personal" />
+          <select value={profileFilter} onChange={(e)=>setProfileFilter(e.target.value)}>
+            <option value="">(Tous)</option>
+            {uniqueProfiles.map(p => <option key={p} value={p}>{p}</option>)}
+          </select>
+          <button className="btn" onClick={()=>{
+            const ids = filteredItems.map(i=>i.id)
+            setSelectedIds(prev => new Set([...prev, ...ids]))
+          }}>Sélectionner visibles</button>
+          <button className="btn" onClick={()=>{
+            const ids = filteredItems.map(i=>i.id)
+            setSelectedIds(prev => {
+              const copy = new Set(prev)
+              for (const id of ids) copy.delete(id)
+              return copy
+            })
+          }}>Désélectionner visibles</button>
+        </div>
+
         <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <input type="checkbox" onChange={(e) => {
-            if (e.target.checked) setSelectedIds(new Set(items.map(i=>i.id)))
-            else setSelectedIds(new Set())
-          }} checked={items.length>0 && selectedIds.size===items.length} />
-          Sélectionner tout
+            const filteredIds = filteredItems.map(i=>i.id)
+            if (e.target.checked) {
+              setSelectedIds(prev => new Set([...prev, ...filteredIds]))
+            } else {
+              setSelectedIds(prev => {
+                const copy = new Set(prev)
+                for (const id of filteredIds) copy.delete(id)
+                return copy
+              })
+            }
+          }} checked={filteredItems.length>0 && filteredItems.every(i=>selectedIds.has(i.id))} />
+          Sélectionner tout (visibles)
         </label>
 
-        <button onClick={checkPwnedForSelected} disabled={checking || selectedIds.size===0}>
+        <button className="btn btnPrimary" onClick={checkPwnedForSelected} disabled={checking || selectedIds.size===0}>
           {checking ? 'Vérification...' : `Vérifier ${selectedIds.size} sélection(s)`}
         </button>
 
-        <button onClick={deleteSelected} style={{ marginLeft: 8 }} disabled={selectedIds.size===0}>Supprimer la sélection</button>
+        <button className="btn btnDanger ml8" onClick={deleteSelected} disabled={selectedIds.size===0}>Supprimer la sélection</button>
 
-        <button onClick={() => exportCSV(items)} style={{ marginLeft: 8 }} disabled={items.length===0}>Exporter CSV</button>
+        <button className="btn ml8" onClick={() => exportCSV(filteredItems.length ? filteredItems : items)} disabled={items.length===0}>Exporter CSV</button>
       </section>
 
       <section style={{ marginTop: 20 }} className={styles.tableWrapper}>
@@ -210,23 +293,35 @@ export default function Home() {
             </tr>
           </thead>
           <tbody>
-            {items.map(it => (
-              <tr key={it.id} style={{ borderTop: '1px solid #eee', background: it.pwnedCount>0 ? '#fff6f6' : 'transparent' }}>
-                <td style={{ padding: 8 }}>
+            {filteredItems.map(it => (
+              <tr key={it.id} className={`tableRow ${ (it.pwnedCount||0)>0 ? 'rowBad':'' }`}>
+                <td>
                   <input type="checkbox" checked={selectedIds.has(it.id)} onChange={() => toggleSelect(it.id)} />
                 </td>
-                <td style={{ padding: 8 }}>{it.profile}</td>
-                <td style={{ padding: 8 }}>{it.site}</td>
-                <td style={{ padding: 8 }}>{it.username}</td>
-                <td style={{ padding: 8 }}>{it.usage}</td>
-                <td style={{ padding: 8 }}>
-                  {it.pwnedCount == null ? '—' : it.pwnedCount > 0 ? <span className={`${styles.badge} ${styles.badge_bad}`}>{it.pwnedCount} fois</span> : <span className={`${styles.badge} ${styles.badge_safe}`}>Non</span>}
+                <td>{it.profile}</td>
+                <td>{it.site}</td>
+                <td>{it.username}</td>
+                <td>{it.usage}</td>
+                <td>
+                  {it.pwnedCount == null ? <span className="muted">—</span> : it.pwnedCount > 0 ? <span className={`badge badge_bad`}>{it.pwnedCount} fois</span> : <span className={`badge badge_safe`}>Non</span>}
                 </td>
               </tr>
             ))}
           </tbody>
         </table>
       </section>
+      {showDeleteConfirm && (
+        <div className={styles.modalOverlay} role="dialog" aria-modal="true">
+          <div className={styles.modalDialog}>
+            <h3>Confirmer la suppression</h3>
+            <p>Voulez-vous vraiment supprimer {pendingDeleteIds.size} élément(s) ? Cette action est irréversible.</p>
+            <div className={styles.modalActions}>
+              <button className="btn" onClick={cancelDelete}>Annuler</button>
+              <button className="btn btnDanger" onClick={performDeleteConfirmed}>Supprimer</button>
+            </div>
+          </div>
+        </div>
+      )}
     </main>
   )
 }
